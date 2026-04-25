@@ -245,5 +245,10 @@ class OpenBargainConfig:
     utility: UtilityConfig = field(default_factory=UtilityConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
 
+    @classmethod
+    def default(cls) -> "OpenBargainConfig":
+        """Return the default benchmark configuration."""
+        return cls()
+
 
 DEFAULT_BENCHMARK_CONFIG = OpenBargainConfig()

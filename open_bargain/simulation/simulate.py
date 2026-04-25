@@ -97,6 +97,8 @@ def _validate_policy_action(
         raise ValueError("Policy action payload must be a dictionary when provided.")
     if action_type in ("propose", "counteroffer"):
         allocation = payload.get("allocation")
+        if isinstance(allocation, list):
+            raise ValueError("allocation must be dict, not list")
         if not isinstance(allocation, dict):
             raise ValueError(
                 "Proposal and counteroffer actions require payload['allocation'] dictionaries."
@@ -756,37 +758,49 @@ def simulate_episode(
     cumulative_rewards = {agent_id: 0.0 for agent_id in agent_ids}
     step_index = 0
     while True:
-        active_agent_id = _extract_active_agent_id(observations, agent_ids)
-        action = policies[active_agent_id].select_action(observations[active_agent_id])
-        _validate_policy_action(
-            action=action,
-            active_agent_id=active_agent_id,
-            observation=observations[active_agent_id],
-            agent_ids=agent_ids,
-        )
-        if DEBUG_MODE:
-            print(f"[OpenBargain] episode={episode_index} step={step_index} agent={active_agent_id} action={action.get('action_type')}")
-        next_observations, rewards, terminated, truncated, info = env.step(action)
-        for agent_id, value in rewards.items():
-            parsed_reward = float(value)
-            _validate_finite(parsed_reward, f"reward[{agent_id}]")
-            cumulative_rewards[agent_id] = cumulative_rewards.get(agent_id, 0.0) + parsed_reward
-        step_traces.append(
-            StepTrace(
-                step_index=step_index,
-                acting_agent_id=active_agent_id,
-                action=dict(action),
-                observations=dict(next_observations),
-                rewards=dict(rewards),
-                terminated=dict(terminated),
-                truncated=dict(truncated),
-                info=dict(info),
+        try:
+            active_agent_id = _extract_active_agent_id(observations, agent_ids)
+            action = policies[active_agent_id].select_action(observations[active_agent_id])
+            _validate_policy_action(
+                action=action,
+                active_agent_id=active_agent_id,
+                observation=observations[active_agent_id],
+                agent_ids=agent_ids,
             )
-        )
-        observations = next_observations
-        step_index += 1
-        if bool(terminated.get("__all__", False)) or bool(truncated.get("__all__", False)):
-            break
+            if DEBUG_MODE:
+                print(f"[OpenBargain] episode={episode_index} step={step_index} agent={active_agent_id} action={action.get('action_type')}")
+            next_observations, rewards, terminated, truncated, info = env.step(action)
+            # Safe extraction of active agent for metrics
+            info["active_agent"] = info.get("active_agent") or info.get("state_summary", {}).get("active_proposer_id") or active_agent_id
+            for agent_id, value in rewards.items():
+                parsed_reward = float(value)
+                _validate_finite(parsed_reward, f"reward[{agent_id}]")
+                cumulative_rewards[agent_id] = cumulative_rewards.get(agent_id, 0.0) + parsed_reward
+            step_traces.append(
+                StepTrace(
+                    step_index=step_index,
+                    acting_agent_id=active_agent_id,
+                    action=dict(action),
+                    observations=dict(next_observations),
+                    rewards=dict(rewards),
+                    terminated=dict(terminated),
+                    truncated=dict(truncated),
+                    info=dict(info),
+                )
+            )
+            observations = next_observations
+            step_index += 1
+            if bool(terminated.get("__all__", False)) or bool(truncated.get("__all__", False)) or step_index > 200:
+                break
+        except Exception as e:
+            return _build_failed_episode_trace(
+                episode_index=episode_index,
+                seed=seed,
+                agent_ids=agent_ids,
+                error=e,
+                metrics_engine=metrics_engine,
+                max_rounds=env.config.environment.max_negotiation_rounds,
+            )
     final_info = step_traces[-1].info if step_traces else {}
     state_summary = final_info.get("state_summary", {})
     if not isinstance(state_summary, dict):
@@ -824,10 +838,18 @@ def simulate_episode(
 
 def simulate_episodes(
     env: OpenBargainEnv,
-    config: OpenBargainConfig,
-    policy_hooks: list[PolicyHook],
+    config: OpenBargainConfig | None = None,
+    policy_hooks: list[PolicyHook] | None = None,
 ) -> SimulationResult:
     """Run deterministic multi-episode simulation and return benchmark outputs."""
+    if config is None:
+        try:
+            from open_bargain.config import OpenBargainConfig
+            config = OpenBargainConfig.default()
+        except ImportError:
+            pass
+    if policy_hooks is None:
+        raise TypeError("simulate_episodes() missing required argument 'policy_hooks'. Provide a list of policies.")
     if config.simulation.num_episodes <= 0:
         raise ValueError(
             f"config.simulation.num_episodes must be > 0. Got {config.simulation.num_episodes}."

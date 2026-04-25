@@ -342,6 +342,7 @@ class OpenBargainEnv(gym.Env[dict[str, Any], dict[str, Any]]):
                 "rounds_used": state.current_round,
                 "rewards": dict(rewards),
             },
+            "active_agent": state.active_proposer_id,
         }
         if state.outcome is not None:
             info["outcome"] = state.outcome.to_dict()
@@ -439,6 +440,8 @@ class OpenBargainEnv(gym.Env[dict[str, Any], dict[str, Any]]):
     def _extract_allocation(self, action_payload: dict[str, Any]) -> dict[str, float]:
         """Extract and validate allocation dictionary from action payload."""
         allocation_payload = action_payload.get("allocation")
+        if isinstance(allocation_payload, list):
+            raise ValueError("allocation must be dict, not list")
         if not isinstance(allocation_payload, dict):
             raise ValueError("Proposal action requires payload['allocation'] dictionary.")
         allocation = {str(agent_id): float(value) for agent_id, value in allocation_payload.items()}
