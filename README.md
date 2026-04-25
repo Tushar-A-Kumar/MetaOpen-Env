@@ -223,13 +223,6 @@ OpenBargain aligns with OpenEnv and Gymnasium expectations:
 - PPO-ready adaptation layer in [open_bargain/training/train.py](open_bargain/training/train.py).
 - Multi-agent negotiation design preserved through simulation and training wrappers.
 
-## 5-Minute Live Demo Flow
-Use this sequence in a judge demo:
-1. Run the deterministic simulation command and show benchmark_score.
-2. Run the baseline comparison command and show random vs fair vs greedy ranking.
-3. Launch a short PPO training run with fixed seed.
-4. Show post-training evaluation snapshot and compare against baselines.
-5. Highlight deterministic rerun consistency with same seed.
 
 ## Limitations And Future Work
 - GRPO support can be added via the existing pluggable training layer.
