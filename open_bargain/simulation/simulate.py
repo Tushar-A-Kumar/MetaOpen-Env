@@ -1,5 +1,7 @@
 """Simulation runner and rollout utilities for OpenBargain benchmark evaluation."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 import math
 import random
