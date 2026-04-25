@@ -1,0 +1,9 @@
+benchmark:
+  name: OpenBargain
+  package_entrypoint: open_bargain.env.env:OpenBargainEnv
+environment:
+  observation_type: partial_observation
+  action_type: structured_negotiation_action
+training:
+  supported_algorithms:
+    - ppo
