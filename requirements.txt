@@ -2,3 +2,5 @@ gymnasium
 numpy
 pyyaml
 pytest
+stable-baselines3
+matplotlib

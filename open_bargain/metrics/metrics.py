@@ -114,8 +114,8 @@ class AggregateMetrics:
             raise ValueError("Aggregate fairness/exploitability std dev must be non-negative.")
         if self.rounds_to_agreement_std_dev < 0 or self.efficiency_std_dev < 0:
             raise ValueError("Aggregate rounds/efficiency std dev must be non-negative.")
-        if self.episode_count <= 0:
-            raise ValueError(f"AggregateMetrics.episode_count must be > 0. Got {self.episode_count}.")
+        if self.episode_count < 0:
+            raise ValueError(f"AggregateMetrics.episode_count must be >= 0. Got {self.episode_count}.")
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize aggregate metrics to deterministic JSON-safe dictionary."""
@@ -256,7 +256,20 @@ class MetricsEngine:
     def aggregate(self, episodes: list[EpisodeMetrics]) -> AggregateMetrics:
         """Aggregate benchmark metrics over evaluated episodes."""
         if not episodes:
-            raise ValueError("episodes must contain at least one EpisodeMetrics item.")
+            return AggregateMetrics(
+                agreement_rate=0.0,
+                average_fairness_index=0.0,
+                average_exploitability_score=0.0,
+                average_rounds_to_agreement=0.0,
+                average_efficiency_score=0.0,
+                fairness_std_dev=0.0,
+                exploitability_std_dev=0.0,
+                rounds_to_agreement_std_dev=0.0,
+                efficiency_std_dev=0.0,
+                average_social_welfare_score=0.0,
+                benchmark_score=0.0,
+                episode_count=0,
+            )
         count = len(episodes)
         agreements = sum(1 for episode in episodes if episode.agreement_reached)
         agreement_rate = agreements / count

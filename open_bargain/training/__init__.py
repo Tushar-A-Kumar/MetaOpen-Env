@@ -17,6 +17,7 @@ from open_bargain.training.train import (
 	make_env_thunk,
 	register_training_environment,
 	run_training,
+	set_global_seed,
 	train_ppo,
 )
 
@@ -37,5 +38,6 @@ __all__ = [
 	"make_env_thunk",
 	"register_training_environment",
 	"run_training",
+	"set_global_seed",
 	"train_ppo",
 ]

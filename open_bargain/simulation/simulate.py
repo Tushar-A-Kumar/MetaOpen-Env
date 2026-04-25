@@ -10,6 +10,15 @@ from open_bargain.env.env import OpenBargainEnv
 from open_bargain.metrics.metrics import AggregateMetrics, EpisodeMetrics, MetricsEngine
 
 
+DEBUG_MODE = False
+
+
+def set_debug_mode(enabled: bool) -> None:
+    """Enable or disable verbose simulation debugging output."""
+    global DEBUG_MODE
+    DEBUG_MODE = bool(enabled)
+
+
 class SimulationPolicy(Protocol):
     """Protocol for interchangeable simulation-time bargaining policies."""
 
@@ -111,6 +120,51 @@ def _validate_policy_action(
                 "Policy allocation exceeds remaining_resource. "
                 f"total_allocated={total_allocated}, remaining_resource={remaining_resource}."
             )
+
+
+def _build_failed_episode_trace(
+    *,
+    episode_index: int,
+    seed: int,
+    agent_ids: list[str],
+    error: Exception,
+    metrics_engine: MetricsEngine,
+    max_rounds: int,
+) -> EpisodeTrace:
+    """Construct a JSON-safe failure trace when a rollout cannot complete."""
+    if not agent_ids:
+        agent_ids = ["agent_0", "agent_1"]
+    step_agent_id = agent_ids[0]
+    failure_message = f"{type(error).__name__}: {error}"
+    step_trace = StepTrace(
+        step_index=0,
+        acting_agent_id=step_agent_id,
+        action={"agent_id": step_agent_id, "action_type": "reject", "payload": {}},
+        observations={"failure": failure_message, "episode_index": episode_index, "seed": seed},
+        rewards={agent_id: 0.0 for agent_id in agent_ids},
+        terminated={agent_id: True for agent_id in agent_ids} | {"__all__": True},
+        truncated={agent_id: False for agent_id in agent_ids} | {"__all__": False},
+        info={"error": failure_message, "debug_mode": DEBUG_MODE},
+    )
+    episode_metrics = metrics_engine.evaluate_episode(
+        agreement_reached=False,
+        rounds_used=0,
+        max_rounds=max_rounds,
+        final_allocation=None,
+    )
+    return EpisodeTrace(
+        episode_index=episode_index,
+        seed=seed,
+        agent_ids=agent_ids,
+        steps=[step_trace],
+        cumulative_rewards={agent_id: 0.0 for agent_id in agent_ids},
+        total_rewards={agent_id: 0.0 for agent_id in agent_ids},
+        agreement_reached=False,
+        rounds_used=0,
+        final_allocation=None,
+        outcome={"error": failure_message, "termination_reason": "episode_failed"},
+        episode_metrics=episode_metrics,
+    )
 
 
 def _policy_metadata_for(policy: SimulationPolicy) -> dict[str, Any]:
@@ -708,9 +762,13 @@ def simulate_episode(
             observation=observations[active_agent_id],
             agent_ids=agent_ids,
         )
+        if DEBUG_MODE:
+            print(f"[OpenBargain] episode={episode_index} step={step_index} agent={active_agent_id} action={action.get('action_type')}")
         next_observations, rewards, terminated, truncated, info = env.step(action)
         for agent_id, value in rewards.items():
-            cumulative_rewards[agent_id] = cumulative_rewards.get(agent_id, 0.0) + float(value)
+            parsed_reward = float(value)
+            _validate_finite(parsed_reward, f"reward[{agent_id}]")
+            cumulative_rewards[agent_id] = cumulative_rewards.get(agent_id, 0.0) + parsed_reward
         step_traces.append(
             StepTrace(
                 step_index=step_index,
@@ -788,14 +846,26 @@ def simulate_episodes(
         policies_by_agent = {
             f"agent_{index}": policy for index, policy in enumerate(policy_hooks)
         }
-        trace = simulate_episode(
-            env=env,
-            policies=policies_by_agent,
-            metrics_engine=metrics_engine,
-            episode_index=episode_index,
-            seed=episode_seed,
-            reset_options=reset_options,
-        )
+        try:
+            trace = simulate_episode(
+                env=env,
+                policies=policies_by_agent,
+                metrics_engine=metrics_engine,
+                episode_index=episode_index,
+                seed=episode_seed,
+                reset_options=reset_options,
+            )
+        except Exception as error:
+            if DEBUG_MODE:
+                print(f"[OpenBargain] episode={episode_index} failed: {type(error).__name__}: {error}")
+            trace = _build_failed_episode_trace(
+                episode_index=episode_index,
+                seed=episode_seed,
+                agent_ids=list(policy_metadata["agent_ids"]),
+                error=error,
+                metrics_engine=metrics_engine,
+                max_rounds=config.environment.max_negotiation_rounds,
+            )
         traces.append(trace)
     aggregate_metrics = metrics_engine.aggregate([trace.episode_metrics for trace in traces])
     report = _build_simulation_report(traces=traces, aggregate_metrics=aggregate_metrics)

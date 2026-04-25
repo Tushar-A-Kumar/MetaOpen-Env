@@ -122,6 +122,11 @@ def _seed_everything(seed: int) -> None:
         pass
 
 
+def set_global_seed(seed: int) -> None:
+    """Seed all available random number generators used by OpenBargain training."""
+    _seed_everything(seed)
+
+
 def _require_numpy() -> Any:
     """Return NumPy when available or raise a clear training-time error."""
     if np is None:  # pragma: no cover - depends on local environment.
@@ -505,7 +510,7 @@ class PPOCompatibleOpenBargainEnv(_GymEnvBase):
 
     def _compute_feature_size(self) -> int:
         """Compute the flattened observation size deterministically."""
-        return 14 + len(self._agent_ids) + len(self._action_types)
+        return 15 + len(self._agent_ids) + len(self._action_types)
 
     def _latest_raw_observation(self, agent_id: str) -> dict[str, Any]:
         """Fetch the latest raw observation for the requested agent."""
@@ -574,6 +579,10 @@ class PPOCompatibleOpenBargainEnv(_GymEnvBase):
             features.append(float(current_offer.get(agent_id, 0.0)) / max(1.0, float(total_resource)))
         for action_type in self._action_types:
             features.append(float(recent_action_summary.get(action_type, 0)) / max(1.0, float(history_window)))
+        action_mask = np_module.asarray(
+            [1 if bool(valid_action_mask.get(action_type, False)) else 0 for action_type in self._action_types],
+            dtype=np_module.int8,
+        )
         return {
             "observation": np_module.asarray(features, dtype=np_module.float32),
             "action_mask": action_mask,
@@ -941,29 +950,31 @@ def evaluate_policy(
 
     evaluation_seed = config.seed + config.evaluation_frequency + training_step
     evaluation_env = _build_raw_env_for_evaluation(config, evaluation_seed)
-    policies = _build_simulation_policies(model, config)
-    benchmark_config = replace(
-        config.open_bargain_config,
-        simulation=replace(config.open_bargain_config.simulation, default_random_seed=evaluation_seed),
-    )
-    simulation_result = simulate_episodes(
-        env=evaluation_env,
-        config=benchmark_config,
-        policy_hooks=policies,
-    )
-    evaluation_env.close()
-    if simulation_result.aggregate_metrics is None:
-        raise RuntimeError("Evaluation simulation did not produce aggregate metrics.")
-    benchmark_artifact = simulation_result.export_benchmark_artifact()
-    snapshot = EvaluationSnapshot(
-        training_step=training_step,
-        seed=evaluation_seed,
-        episode_count=len(simulation_result.traces),
-        benchmark_artifact=benchmark_artifact,
-        aggregate_metrics=simulation_result.aggregate_metrics.to_dict(),
-        reward_summary=simulation_result.export_reward_summary(),
-        policy_metadata=_canonical_json_value(simulation_result.policy_metadata),
-    )
+    try:
+        policies = _build_simulation_policies(model, config)
+        benchmark_config = replace(
+            config.open_bargain_config,
+            simulation=replace(config.open_bargain_config.simulation, default_random_seed=evaluation_seed),
+        )
+        simulation_result = simulate_episodes(
+            env=evaluation_env,
+            config=benchmark_config,
+            policy_hooks=policies,
+        )
+        if simulation_result.aggregate_metrics is None:
+            raise RuntimeError("Evaluation simulation did not produce aggregate metrics.")
+        benchmark_artifact = simulation_result.export_benchmark_artifact()
+        snapshot = EvaluationSnapshot(
+            training_step=training_step,
+            seed=evaluation_seed,
+            episode_count=len(simulation_result.traces),
+            benchmark_artifact=benchmark_artifact,
+            aggregate_metrics=simulation_result.aggregate_metrics.to_dict(),
+            reward_summary=simulation_result.export_reward_summary(),
+            policy_metadata=_canonical_json_value(simulation_result.policy_metadata),
+        )
+    finally:
+        evaluation_env.close()
     if logger is not None:
         metrics = simulation_result.aggregate_metrics
         logger.log_scalar("eval/agreement_rate", metrics.agreement_rate, training_step)
@@ -994,7 +1005,7 @@ def train_ppo(
 ) -> TrainingRunResult:
     """Train a PPO agent against OpenBargain using an external PPO implementation."""
     PPO, BaseCallback, DummyVecEnv, VecMonitor = _load_sb3_dependencies()
-    _seed_everything(config.seed)
+    set_global_seed(config.seed)
     config_snapshot = _build_config_snapshot(config)
     checkpoint_manager = CheckpointManager(
         checkpoint_dir=Path(config.checkpoint_dir),
@@ -1025,6 +1036,7 @@ def train_ppo(
     evaluation_history: list[EvaluationSnapshot] = []
     checkpoint_history: list[CheckpointRecord] = []
     best_checkpoint: CheckpointRecord | None = None
+    final_checkpoint: CheckpointRecord | None = None
     best_score = -math.inf
 
     class TrainingProgressCallback(BaseCallback):
@@ -1074,23 +1086,32 @@ def train_ppo(
                 logger.flush()
             return True
 
-    model.learn(total_timesteps=config.total_timesteps, callback=TrainingProgressCallback())
-    final_evaluation = evaluate_policy(model, config, training_step=config.total_timesteps, logger=logger)
-    evaluation_history.append(final_evaluation)
-    final_checkpoint = checkpoint_manager.save(
-        model=model,
-        kind="final",
-        training_step=config.total_timesteps,
-        evaluation_snapshot=final_evaluation,
-        seed=config.seed,
-    )
-    checkpoint_history.append(final_checkpoint)
-    if best_checkpoint is None:
-        best_checkpoint = final_checkpoint
-    logger.log_json("train/final_evaluation", final_evaluation.to_dict(), config.total_timesteps)
-    logger.flush()
-    if hasattr(train_env, "close"):
-        train_env.close()
+    try:
+        model.learn(total_timesteps=config.total_timesteps, callback=TrainingProgressCallback())
+    except KeyboardInterrupt:
+        if logger is not None:
+            logger.log_json("train/interrupted", {"reason": "KeyboardInterrupt"}, step=config.total_timesteps)
+    finally:
+        pass
+
+    try:
+        final_evaluation = evaluate_policy(model, config, training_step=config.total_timesteps, logger=logger)
+        evaluation_history.append(final_evaluation)
+        final_checkpoint = checkpoint_manager.save(
+            model=model,
+            kind="final",
+            training_step=config.total_timesteps,
+            evaluation_snapshot=final_evaluation,
+            seed=config.seed,
+        )
+        checkpoint_history.append(final_checkpoint)
+        if best_checkpoint is None:
+            best_checkpoint = final_checkpoint
+        logger.log_json("train/final_evaluation", final_evaluation.to_dict(), config.total_timesteps)
+        logger.flush()
+    finally:
+        if hasattr(train_env, "close"):
+            train_env.close()
     return TrainingRunResult(
         config_snapshot=config_snapshot,
         total_timesteps=config.total_timesteps,
@@ -1127,6 +1148,7 @@ __all__ = [
     "TrainingHooks",
     "TrainingLogger",
     "TrainingRunResult",
+    "set_global_seed",
     "evaluate_policy",
     "make_env",
     "make_env_thunk",

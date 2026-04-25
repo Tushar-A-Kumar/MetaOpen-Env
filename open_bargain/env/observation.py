@@ -35,7 +35,7 @@ class PublicObservation:
     active_proposer_id: str
     remaining_resource: float
     remaining_resource_normalized: float
-    current_public_offer: dict[str, float] | None
+    current_public_offer: dict[str, float]
     rounds_remaining: int
     round_progress: float
     is_terminal: bool
@@ -48,9 +48,7 @@ class PublicObservation:
             "active_proposer_id": self.active_proposer_id,
             "remaining_resource": self.remaining_resource,
             "remaining_resource_normalized": self.remaining_resource_normalized,
-            "current_public_offer": None
-            if self.current_public_offer is None
-            else dict(self.current_public_offer),
+            "current_public_offer": dict(self.current_public_offer),
             "rounds_remaining": self.rounds_remaining,
             "round_progress": self.round_progress,
             "is_terminal": self.is_terminal,
@@ -62,16 +60,14 @@ class PrivateObservation:
     """Agent-private observation slice containing only local hidden context."""
 
     observing_agent_id: str
-    private_utility_profile_summary: dict[str, float] | None
+    private_utility_profile_summary: dict[str, float]
     local_context: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize private observation to deterministic JSON-safe dictionary."""
         return {
             "observing_agent_id": self.observing_agent_id,
-            "private_utility_profile_summary": None
-            if self.private_utility_profile_summary is None
-            else dict(self.private_utility_profile_summary),
+            "private_utility_profile_summary": dict(self.private_utility_profile_summary),
             "local_context": dict(self.local_context),
         }
 
@@ -80,7 +76,7 @@ class PrivateObservation:
 class ObservationSummary:
     """Compact fixed-size summary of recent negotiation history."""
 
-    last_offer: dict[str, float] | None
+    last_offer: dict[str, float]
     recent_action_summary: dict[str, int]
     offer_count: int
     rejection_count: int
@@ -89,7 +85,7 @@ class ObservationSummary:
     def to_dict(self) -> dict[str, Any]:
         """Serialize summary to deterministic JSON-safe dictionary."""
         return {
-            "last_offer": None if self.last_offer is None else dict(self.last_offer),
+            "last_offer": dict(self.last_offer),
             "recent_action_summary": dict(self.recent_action_summary),
             "offer_count": self.offer_count,
             "rejection_count": self.rejection_count,
@@ -192,15 +188,15 @@ class ObservationBuilder:
 
     def _extract_public_observation(self, state: NegotiationState) -> PublicObservation:
         """Extract public state features visible to all agents."""
+        current_offer = self._zero_allocation(state.valid_agent_ids)
+        if state.current_active_offer is not None:
+            current_offer = self._normalize_allocation(state.current_active_offer.proposed_allocation, state.valid_agent_ids)
         rounds_remaining = max(0, self._max_rounds - state.current_round)
         round_progress = self._normalize_ratio(state.current_round, self._max_rounds)
         remaining_resource_normalized = self._normalize_ratio(
             state.remaining_resource,
             self._total_resource,
         )
-        current_offer = None
-        if state.current_active_offer is not None:
-            current_offer = dict(state.current_active_offer.proposed_allocation)
         public_obs = PublicObservation(
             current_round=state.current_round,
             current_step=state.current_step,
@@ -227,7 +223,11 @@ class ObservationBuilder:
         profile: PreferenceProfile | None,
     ) -> PrivateObservation:
         """Extract observing-agent-only features and preserve hidden-information safety."""
-        profile_summary: dict[str, float] | None = None
+        profile_summary: dict[str, float] = {
+            "greed_sensitivity": 0.0,
+            "fairness_sensitivity": 0.0,
+            "urgency_sensitivity": 0.0,
+        }
         if profile is not None:
             if profile.agent_id != observing_agent_id:
                 raise ValueError(
@@ -252,9 +252,9 @@ class ObservationBuilder:
 
     def _summarize_history(self, state: NegotiationState) -> ObservationSummary:
         """Produce compact fixed-size summary features from trajectory history."""
-        last_offer = None
+        last_offer = self._zero_allocation(state.valid_agent_ids)
         if state.offer_history:
-            last_offer = dict(state.offer_history[-1].proposed_allocation)
+            last_offer = self._normalize_allocation(state.offer_history[-1].proposed_allocation, state.valid_agent_ids)
         recent_actions = state.action_history[-self._history_window :]
         recent_action_summary = {action_type: 0 for action_type in self._action_types}
         rejection_count = 0
@@ -337,3 +337,14 @@ class ObservationBuilder:
     def _count_agent_actions(actions: list[ActionRecord], agent_id: str) -> int:
         """Count actions emitted by one agent for local context."""
         return sum(1 for action in actions if action.acting_agent_id == agent_id)
+
+    @staticmethod
+    def _zero_allocation(agent_ids: tuple[str, ...]) -> dict[str, float]:
+        """Create a deterministic zero allocation for all valid agents."""
+        return {agent_id: 0.0 for agent_id in agent_ids}
+
+    @staticmethod
+    def _normalize_allocation(allocation: dict[str, float], agent_ids: tuple[str, ...]) -> dict[str, float]:
+        """Normalize a sparse allocation to include all agents with stable key order."""
+        normalized = {agent_id: float(allocation.get(agent_id, 0.0)) for agent_id in agent_ids}
+        return normalized
