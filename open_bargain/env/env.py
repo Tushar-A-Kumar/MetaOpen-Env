@@ -228,7 +228,7 @@ class OpenBargainEnv(gym.Env[dict[str, Any], dict[str, Any]]):
                 )
             )
             state.increment_step()
-            self._advance_round_and_switch_proposer(state=state, current_agent_id=acting_agent_id)
+            state.switch_proposer(self._other_agent_id(acting_agent_id))
             return
         if action_type == "accept":
             if state.current_active_offer is None:
