@@ -851,29 +851,20 @@ def simulate_episodes(
     if policy_hooks is None:
         raise TypeError("simulate_episodes() missing required argument 'policy_hooks'. Provide a list of policies.")
 
-    sim_cfg = config.get("simulation", {}) if isinstance(config, dict) else getattr(config, "simulation", config)
-
-    def cfg(key, default=None):
-        if isinstance(sim_cfg, dict):
-            return sim_cfg.get(key, default)
-        return getattr(sim_cfg, key, default)
-
-    num_episodes = cfg("num_episodes")
-    if num_episodes is None or num_episodes <= 0:
+    num_episodes = config.simulation.num_episodes
+    if num_episodes <= 0:
         raise ValueError(f"Invalid num_episodes: {num_episodes}")
 
     if len(policy_hooks) < 2:
         raise ValueError("At least two policy hooks are required for bargaining simulation.")
     
-    # We also safely extract total_resource_amount avoiding attribute errors
-    env_cfg = config.get("environment", {}) if isinstance(config, dict) else getattr(config, "environment", config)
-    total_resource_amount = env_cfg.get("total_resource_amount", 100.0) if isinstance(env_cfg, dict) else getattr(env_cfg, "total_resource_amount", 100.0)
+    total_resource_amount = config.environment.total_resource_amount
 
     metrics_engine = MetricsEngine(
         reference_total_resource=total_resource_amount,
     )
     traces: list[EpisodeTrace] = []
-    base_seed = cfg("default_random_seed", 0)
+    base_seed = config.simulation.default_random_seed
     policy_metadata = _build_policy_metadata(
         {f"agent_{index}": policy for index, policy in enumerate(policy_hooks)}
     )
@@ -895,7 +886,7 @@ def simulate_episodes(
         except Exception as error:
             if DEBUG_MODE:
                 print(f"[OpenBargain] episode={episode_index} failed: {type(error).__name__}: {error}")
-            max_rounds = env_cfg.get("max_negotiation_rounds", 10) if isinstance(env_cfg, dict) else getattr(env_cfg, "max_negotiation_rounds", 10)
+            max_rounds = config.environment.max_negotiation_rounds
             trace = _build_failed_episode_trace(
                 episode_index=episode_index,
                 seed=episode_seed,

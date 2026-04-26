@@ -222,6 +222,7 @@ class SimulationConfig:
     """
 
     default_random_seed: int = 0
+    num_episodes: int = 100
     logging_enabled: bool = True
     metrics_enabled: bool = True
     trace_history_enabled: bool = True
@@ -247,8 +248,17 @@ class OpenBargainConfig:
 
     @classmethod
     def default(cls) -> "OpenBargainConfig":
-        """Return the default benchmark configuration."""
-        return cls()
+        """Return the default benchmark configuration with strict validation."""
+        config = cls()
+        if config.simulation.num_episodes <= 0:
+            raise ValueError(f"num_episodes must be > 0. Got {config.simulation.num_episodes}")
+        if config.environment.max_negotiation_rounds <= 0:
+            raise ValueError(f"max_negotiation_rounds must be > 0. Got {config.environment.max_negotiation_rounds}")
+        if config.environment.total_resource_amount <= 0:
+            raise ValueError(f"total_resource_amount must be > 0. Got {config.environment.total_resource_amount}")
+        if not config.environment.action_types:
+            raise ValueError("action_types must be non-empty.")
+        return config
 
 
 DEFAULT_BENCHMARK_CONFIG = OpenBargainConfig()

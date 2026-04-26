@@ -89,6 +89,7 @@ class OpenBargainEnv(gym.Env[dict[str, Any], dict[str, Any]]):
             event="reset",
             rewards={agent_id: 0.0 for agent_id in self._agent_ids},
         )
+        self._validate_observation_schema(observations)
         return observations, info
 
     def step(
@@ -123,6 +124,7 @@ class OpenBargainEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         truncated = {agent_id: False for agent_id in self._agent_ids}
         truncated["__all__"] = False
         info = self._build_info(event="step", rewards=rewards)
+        self._validate_step_outputs(observations, rewards, terminated, truncated)
         return observations, rewards, terminated, truncated, info
 
     def reset_batch(
@@ -637,3 +639,52 @@ class OpenBargainEnv(gym.Env[dict[str, Any], dict[str, Any]]):
         self.action_space_spec = self._build_action_space_spec()
         self.observation_space = self._build_observation_space()
         self.action_space = self._build_action_space()
+
+    def _validate_observation_schema(self, observations: dict[str, dict[str, Any]]) -> None:
+        """Strictly validate schema compliance for environment observations."""
+        if set(observations.keys()) != set(self._agent_ids):
+            raise ValueError(f"Observations must contain exactly agents {self._agent_ids}. Got {list(observations.keys())}")
+        
+        for agent_id, obs in observations.items():
+            for key in ("public", "private", "summary", "valid_action_mask"):
+                if key not in obs:
+                    raise ValueError(f"Observation for {agent_id} missing top-level key '{key}'")
+            
+            public = obs["public"]
+            for p_key in ("active_proposer_id", "remaining_resource", "current_public_offer"):
+                if p_key not in public:
+                    raise ValueError(f"Observation public section for {agent_id} missing '{p_key}'")
+            
+            active_proposer = public["active_proposer_id"]
+            if not isinstance(active_proposer, str) or not active_proposer.strip() or active_proposer not in self._agent_ids:
+                raise ValueError(f"Invalid active_proposer_id '{active_proposer}' in observation for {agent_id}")
+            
+            offer = public["current_public_offer"]
+            if offer is not None and not isinstance(offer, dict):
+                raise ValueError(f"current_public_offer must be None or dict. Got {type(offer)} in observation for {agent_id}")
+
+            mask = obs["valid_action_mask"]
+            for a_key in ("propose", "counteroffer", "accept", "reject"):
+                if a_key not in mask or not isinstance(mask[a_key], bool):
+                    raise ValueError(f"Action mask for {agent_id} missing or invalid boolean for '{a_key}'")
+
+    def _validate_step_outputs(
+        self,
+        observations: dict[str, dict[str, Any]],
+        rewards: dict[str, float],
+        terminated: dict[str, bool],
+        truncated: dict[str, bool]
+    ) -> None:
+        """Validate step outputs have complete schemas."""
+        self._validate_observation_schema(observations)
+        
+        expected_agents = set(self._agent_ids)
+        if set(rewards.keys()) != expected_agents:
+            raise ValueError(f"Rewards missing agents. Expected {expected_agents}, got {set(rewards.keys())}")
+            
+        expected_term = expected_agents | {"__all__"}
+        if set(terminated.keys()) != expected_term:
+            raise ValueError(f"Terminated missing keys. Expected {expected_term}, got {set(terminated.keys())}")
+            
+        if set(truncated.keys()) != expected_term:
+            raise ValueError(f"Truncated missing keys. Expected {expected_term}, got {set(truncated.keys())}")

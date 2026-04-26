@@ -35,7 +35,7 @@ class PublicObservation:
     active_proposer_id: str
     remaining_resource: float
     remaining_resource_normalized: float
-    current_public_offer: dict[str, float]
+    current_public_offer: dict[str, float] | None
     rounds_remaining: int
     round_progress: float
     is_terminal: bool
@@ -48,7 +48,7 @@ class PublicObservation:
             "active_proposer_id": self.active_proposer_id,
             "remaining_resource": self.remaining_resource,
             "remaining_resource_normalized": self.remaining_resource_normalized,
-            "current_public_offer": dict(self.current_public_offer),
+            "current_public_offer": None if self.current_public_offer is None else dict(self.current_public_offer),
             "rounds_remaining": self.rounds_remaining,
             "round_progress": self.round_progress,
             "is_terminal": self.is_terminal,
@@ -188,7 +188,7 @@ class ObservationBuilder:
 
     def _extract_public_observation(self, state: NegotiationState) -> PublicObservation:
         """Extract public state features visible to all agents."""
-        current_offer = self._zero_allocation(state.valid_agent_ids)
+        current_offer: dict[str, float] | None = None
         if state.current_active_offer is not None:
             current_offer = self._normalize_allocation(state.current_active_offer.proposed_allocation, state.valid_agent_ids)
         rounds_remaining = max(0, self._max_rounds - state.current_round)
@@ -291,7 +291,15 @@ class ObservationBuilder:
         }
         for action_type in self._action_types:
             mask.setdefault(action_type, False)
-        return {action_type: mask[action_type] for action_type in self._action_types}
+        
+        # Guarantee base actions are always present in the returned dictionary
+        return {
+            "propose": mask.get("propose", False),
+            "counteroffer": mask.get("counteroffer", False),
+            "accept": mask.get("accept", False),
+            "reject": mask.get("reject", False),
+            **{k: mask[k] for k in self._action_types if k not in ("propose", "counteroffer", "accept", "reject")}
+        }
 
     def _validate_agent_id(self, state: NegotiationState, agent_id: str) -> None:
         """Validate observing agent belongs to state-defined participants."""
@@ -303,12 +311,12 @@ class ObservationBuilder:
 
     def _validate_action_mask(self, action_mask: dict[str, bool]) -> None:
         """Validate action mask keys and values are consistent."""
-        expected = set(self._action_types)
+        expected = set(self._action_types) | {"propose", "counteroffer", "accept", "reject"}
         actual = set(action_mask.keys())
-        if expected != actual:
+        if not expected.issubset(actual):
             raise ValueError(
-                "Action mask keys mismatch configured action types. "
-                f"expected={sorted(expected)}, actual={sorted(actual)}."
+                "Action mask keys missing base action types. "
+                f"expected subset={sorted(expected)}, actual={sorted(actual)}."
             )
         for action_name, is_valid in action_mask.items():
             if not isinstance(is_valid, bool):
